@@ -1,11 +1,11 @@
 {
-  "_comment": "ml-commons FLOW AGENT registration -- also CONFIGURATION, not code. Register with: POST /_plugins/_ml/agents/_register (body = this file, minus _comment fields). It returns an agent_id. This is the SAME shape as today's 'Agentic Search DSL Agent' (type: flow), except the single tool is a ConnectorTool pointing at our connector instead of the in-JVM QueryPlanningTool. That one swap is what moves the NLQ->DSL translation out to the agent server.",
+  "_comment": "FLOW agent with one ConnectorTool that delegates NLQ->DSL generation to the agent server. Register with POST /_plugins/_ml/agents/_register; type 'flow' selects MLAgentType.FLOW.",
 
   "name": "Agentic Search Remote DSL Agent",
   "type": "flow",
-  "description": "FLOW agent that delegates NLQ->DSL generation to the agent server via ConnectorTool.",
+  "description": "Single-tool FLOW agent that generates OpenSearch DSL via a connector to the agent server.",
 
-  "_comment_tools": "Exactly ONE tool. Single-tool FLOW short-circuits in MLFlowAgentRunner (calls firstTool.run directly). connector_id comes from registering 01_connector.json.",
+  "_comment_tools": "A single-tool FLOW agent returns the tool's output directly. connector_id is the connector registered from 01_connector.json. connector_action selects which connector action runs ('predict' here, matching that connector's action_type).",
   "tools": [
     {
       "type": "ConnectorTool",

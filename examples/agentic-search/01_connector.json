@@ -1,24 +1,24 @@
 {
-  "_comment": "ml-commons CONNECTOR blueprint -- this is CONFIGURATION, not code. Register it against a running cluster (./gradlew run) with: POST /_plugins/_ml/connectors/_create  (body = this file, minus _comment fields). It returns a connector_id you paste into 02_flow_agent.json. The built-in ConnectorTool uses this blueprint to make the HTTP call to the agent server's /generate_dsl. No Java is written.",
+  "_comment": "Connector that calls the agent server's /generate_dsl endpoint. Register with POST /_plugins/_ml/connectors/_create; the returned connector_id is referenced by the FLOW agent in 02_flow_agent.json.",
 
   "name": "Agentic Search Remote DSL Connector",
-  "description": "Calls the agent server's non-streaming /generate_dsl endpoint to translate NLQ -> OpenSearch DSL.",
+  "description": "Calls the agent server's /generate_dsl endpoint to translate a natural-language query into OpenSearch DSL.",
   "version": "1",
   "protocol": "http",
 
-  "_comment_parameters": "Defaults merged into every request; ${parameters.endpoint} is substituted into the url below. Set endpoint to the agent server's host.",
+  "_comment_parameters": "parameters supply defaults substituted into the action below as ${parameters.*}. Set endpoint to the agent server's host.",
   "parameters": {
     "endpoint": "127.0.0.1:8001"
   },
 
-  "_comment_credential": "POC: a static bearer token. Secrets MUST be referenced as ${credential.*} (ml-commons blocks ${parameters.*} in security headers like Authorization). ml-commons encrypts the credential map at rest.",
+  "_comment_credential": "Credential values are encrypted at rest on connector creation and referenced as ${credential.*}. Security-sensitive headers such as Authorization reject ${parameters.*} placeholders, so the token must come from credential.",
   "credential": {
-    "token": "poc-static-token"
+    "token": "replace-with-agent-server-token"
   },
 
   "actions": [
     {
-      "_comment_action": "ConnectorTool drives the EXECUTE path, but predict is the standard action_type and shares the same createPayload/processOutput pipeline.",
+      "_comment_action": "action_type 'predict' is selected by the FLOW agent's tool via connector_action (see 02_flow_agent.json); if that parameter is omitted, the ConnectorTool path defaults to the 'execute' action instead.",
       "action_type": "predict",
       "method": "POST",
       "url": "http://${parameters.endpoint}/generate_dsl",
@@ -27,10 +27,10 @@
         "Authorization": "Bearer ${credential.token}"
       },
 
-      "_comment_request_body": "Templated from the params ml-commons passes the tool. neural-search puts the NLQ in 'question' and the index in 'index_name' (see MLCommonsClientAccessor). These ${parameters.*} are filled at call time.",
+      "_comment_request_body": "${parameters.question} and ${parameters.index_name} are filled from the agent's runtime parameters at call time.",
       "request_body": "{ \"question\": \"${parameters.question}\", \"index_name\": \"${parameters.index_name}\" }",
 
-      "_comment_post_process": "THE KEY LINE. The built-in mlcommons.passthrough function reads output[0].result from our inference_results envelope and copies it into ModelTensor.result -- the only field neural-search's extractFlowAgentResult reads. Without this, the DSL would land in dataAsMap and the FLOW agent would fail with 'did not return valid DSL query'. No painless script needed.",
+      "_comment_post_process": "connector.post_process.mlcommons.passthrough reads the 'result' field from each inference output into ModelTensor.result, which is the field neural-search reads. Without it, the response is wrapped into dataAsMap instead.",
       "post_process_function": "connector.post_process.mlcommons.passthrough"
     }
   ]
