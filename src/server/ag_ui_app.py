@@ -26,6 +26,7 @@ from server.constants import (
 from server.exceptions import APIError
 from server.types import (
     CancelRunResponse,
+    GenerateDslResponse,
     RunEventsResponse,
     RunResponse,
 )
@@ -60,6 +61,7 @@ from server.auth_middleware import (  # noqa: E402
     create_auth_middleware,
 )
 from server.config import ServerConfig, get_config  # noqa: E402
+from server.dsl_routes import GenerateDslInput, generate_dsl_route  # noqa: E402
 from server.rate_limiting import (  # noqa: E402
     create_rate_limiter,
     get_rate_limit_decorator,
@@ -72,6 +74,7 @@ from server.run_routes import (  # noqa: E402
     get_run_events_route,
     get_run_route,
 )
+
 
 def _init_tracing() -> None:
     """Initialize OpenTelemetry tracing.
@@ -388,6 +391,17 @@ def create_app(config_override: ServerConfig | None = None) -> FastAPI:
             "ag_ui.art_agent_factory_ready",
         )
 
+        # Register the NLQ->DSL generator backing POST /generate_dsl.
+        from server.dsl_generator import BedrockDslGenerator
+        from server.dsl_routes import set_dsl_generator
+
+        set_dsl_generator(BedrockDslGenerator(opensearch_url))
+        log_info_event(
+            logger,
+            "✓ DSL generator registered for /generate_dsl",
+            "ag_ui.dsl_generator_ready",
+        )
+
         yield
 
     app = FastAPI(
@@ -627,6 +641,19 @@ async def cancel_run(run_id: str, request: Request) -> CancelRunResponse:
     return await cancel_run_route(
         persistence=persistence, run_id=run_id, request=request
     )
+
+
+@app.post("/generate_dsl", tags=["runs"])
+async def generate_dsl(
+    input_data: GenerateDslInput, request: Request
+) -> GenerateDslResponse:
+    """Generate OpenSearch DSL from a natural-language query (non-streaming).
+
+    Unlike POST /runs, this returns a single JSON response so an in-cluster
+    caller (ml-commons FLOW agent + ConnectorTool) can consume it. The DSL is
+    returned as a string inside an ml-commons inference_results envelope.
+    """
+    return await generate_dsl_route(request=request, input_data=input_data)
 
 
 if __name__ == "__main__":

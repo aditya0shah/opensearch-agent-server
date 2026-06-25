@@ -476,3 +476,15 @@ class CancelRunResponse(TypedDict):
     runId: str
     canceled: bool
     message: str
+
+
+class GenerateDslResponse(TypedDict):
+    """Response type for POST /generate_dsl.
+
+    Attributes:
+        inference_results: One result whose ``output[0].result`` is the DSL
+            query as a JSON string.
+
+    """
+
+    inference_results: list[dict[str, Any]]
