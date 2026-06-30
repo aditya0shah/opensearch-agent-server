@@ -95,6 +95,22 @@ async def test_non_json_output_falls_back():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("non_object", ['"ok"', "[]", "42", "true", "null"])
+async def test_non_object_json_falls_back(non_object):
+    # Valid JSON that isn't an object is not a usable _search body -> fallback.
+    gen = MagicMock()
+    gen.generate.return_value = non_object
+    set_dsl_generator(gen)
+
+    resp = await generate_dsl_route(
+        request=_request_with_auth(),
+        input_data=GenerateDslInput(question="x", index_name="idx"),
+    )
+
+    assert _result_string(resp) == FALLBACK_DSL
+
+
+@pytest.mark.asyncio
 async def test_no_generator_registered_falls_back():
     resp = await generate_dsl_route(
         request=_request_with_auth(),

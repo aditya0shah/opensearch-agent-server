@@ -1,30 +1,26 @@
 """Default NLQ->DSL generator backing the /generate_dsl endpoint.
 
-Reads the target index mapping, prompts a Bedrock model to translate the
-natural-language question into an OpenSearch query body, and returns it as a
-JSON string. The generator is pluggable via
-:func:`server.dsl_routes.set_dsl_generator`; this is the default implementation.
+Reads the target index mapping, prompts an LLM (Bedrock or Ollama, selected by
+``utils.model_factory.create_model``) to translate the natural-language question
+into an OpenSearch query body, and returns it as a JSON string. The generator is
+pluggable via :func:`server.dsl_routes.set_dsl_generator`; this is the default
+implementation.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
-import boto3
 from opensearchpy import OpenSearch
 from pydantic import BaseModel, ConfigDict, Field
 from strands import Agent
-from strands.models import BedrockModel
 from strands.types.content import SystemContentBlock
 
-logger = logging.getLogger(__name__)
+from utils.model_factory import create_model
 
-# Same default the rest of the repo uses (see default_agent.py). Overridable via
-# the BEDROCK_INFERENCE_PROFILE_ARN env var (an inference-profile ARN or model id).
-_DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+logger = logging.getLogger(__name__)
 
 
 class EmitSearch(BaseModel):
@@ -318,31 +314,19 @@ Emit the OpenSearch _search body for this question.
 """
 
 
-def _get_aws_session() -> boto3.Session:
-    """Create a boto3 session using the default AWS credential provider chain."""
-    return boto3.Session()
-
-
-def _make_model() -> BedrockModel:
-    model_id = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN", _DEFAULT_BEDROCK_MODEL_ID)
-    # streaming=False: a single structured-output call, not an SSE turn. The
-    # system-prompt cache point is set on the prompt content blocks (see
-    # _SYSTEM_BLOCKS), not via model config.
-    return BedrockModel(
-        model_id=model_id,
-        boto_session=_get_aws_session(),
-        streaming=False,
-    )
-
-
 class BedrockDslGenerator:
-    """Reads an index mapping and prompts Bedrock to generate OpenSearch DSL."""
+    """Reads an index mapping and prompts an LLM to generate OpenSearch DSL.
+
+    The model provider (Bedrock or Ollama) is selected by ``create_model`` from
+    the environment; the system prompt's cache point (see ``_SYSTEM_BLOCKS``)
+    applies on Bedrock and is harmlessly ignored on Ollama.
+    """
 
     def __init__(self, opensearch_url: str) -> None:
         self._opensearch_url = opensearch_url
-        # The model uses fixed service credentials, so it is built once and
-        # reused across calls rather than rebuilt per request.
-        self._model = _make_model()
+        # Built once and reused across calls (the provider/credentials are
+        # fixed for the process).
+        self._model = create_model()
 
     def _client(self, auth_token: str | None) -> OpenSearch:
         # The caller's bearer token is forwarded per request when provided;

@@ -25,7 +25,7 @@ def _make_generator():
 
 
 @patch("server.dsl_generator.Agent")
-@patch("server.dsl_generator._make_model")
+@patch("server.dsl_generator.create_model")
 @patch("server.dsl_generator.OpenSearch")
 def test_generate_reads_mapping_and_returns_dsl_string(mock_os, mock_model, mock_agent):
     BedrockDslGenerator, EmitSearch = _make_generator()
@@ -52,7 +52,7 @@ def test_generate_reads_mapping_and_returns_dsl_string(mock_os, mock_model, mock
 
 
 @patch("server.dsl_generator.Agent")
-@patch("server.dsl_generator._make_model")
+@patch("server.dsl_generator.create_model")
 @patch("server.dsl_generator.OpenSearch")
 def test_bearer_token_forwarded_to_client(mock_os, mock_model, mock_agent):
     BedrockDslGenerator, EmitSearch = _make_generator()
@@ -68,7 +68,7 @@ def test_bearer_token_forwarded_to_client(mock_os, mock_model, mock_agent):
 
 
 @patch("server.dsl_generator.Agent")
-@patch("server.dsl_generator._make_model")
+@patch("server.dsl_generator.create_model")
 @patch("server.dsl_generator.OpenSearch")
 def test_no_token_means_no_auth_header(mock_os, mock_model, mock_agent):
     BedrockDslGenerator, EmitSearch = _make_generator()

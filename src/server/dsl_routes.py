@@ -83,8 +83,10 @@ async def generate_dsl_route(
         dsl_query = _generator.generate(
             input_data.question, input_data.index_name, auth_token=token
         )
-        # Fall back unless the generated DSL is parseable JSON.
-        json.loads(dsl_query)
+        # Fall back unless the generated DSL is a JSON object (a _search body).
+        # A bare primitive/array (e.g. "ok", []) parses but is not valid DSL.
+        if not isinstance(json.loads(dsl_query), dict):
+            raise ValueError("generated DSL is not a JSON object")
     except Exception:  # noqa: BLE001 - any generation failure degrades to fallback
         logger.exception(
             "DSL generation failed for index=%s; returning fallback", input_data.index_name
