@@ -18,6 +18,7 @@ from opensearchpy import OpenSearch
 from pydantic import BaseModel, ConfigDict, Field
 from strands import Agent
 from strands.models import BedrockModel
+from strands.types.content import SystemContentBlock
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,16 @@ EXAMPLES = (
 
 _SYSTEM_PROMPT = PROMPT_PREFIX + "\n\n" + OUTPUT_FORMAT_INSTRUCTIONS + "\n" + EXAMPLES
 
+# The system prompt is a static ~3.3k-token prefix sent on every call. The
+# trailing cache point caches it (5-minute TTL) so it is not reprocessed each
+# request; the variable mapping and question live in the user message, after the
+# cached prefix. Passed as content blocks (not a plain string) so the cache
+# point survives to the Bedrock request.
+_SYSTEM_BLOCKS: list[SystemContentBlock] = [
+    {"text": _SYSTEM_PROMPT},
+    {"cachePoint": {"type": "default"}},
+]
+
 _USER_PROMPT = """\
 Question: {question}
 Index: {index_name}
@@ -314,19 +325,13 @@ def _get_aws_session() -> boto3.Session:
 
 def _make_model() -> BedrockModel:
     model_id = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN", _DEFAULT_BEDROCK_MODEL_ID)
-    # streaming=False: this is a single structured_output call, not an SSE turn.
-    #
-    # cache_prompt appends a cache point to the system block, so the static
-    # ~3.3k-token system prompt is cached across calls (5-min TTL) rather than
-    # reprocessed each request. This is the only caching knob that survives the
-    # structured_output path (which forwards the system prompt as a string, not
-    # content blocks); cache_config(strategy="auto") would instead cache the
-    # per-call user message and is not used here.
+    # streaming=False: a single structured-output call, not an SSE turn. The
+    # system-prompt cache point is set on the prompt content blocks (see
+    # _SYSTEM_BLOCKS), not via model config.
     return BedrockModel(
         model_id=model_id,
         boto_session=_get_aws_session(),
         streaming=False,
-        cache_prompt="default",
     )
 
 
@@ -356,16 +361,20 @@ class BedrockDslGenerator:
         """Return the OpenSearch _search body as a JSON string for the NLQ."""
         mapping = self._fetch_mapping(index_name, auth_token)
         # A new Agent per call keeps each request stateless; the reused model
-        # carries the cost-bearing connection.
+        # carries the cost-bearing connection. The system prompt is passed as
+        # content blocks so its cache point reaches the request.
         agent = Agent(
             model=self._model,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_SYSTEM_BLOCKS,
             tools=[],
             callback_handler=None,
         )
         user_msg = _USER_PROMPT.format(
             question=question, index_name=index_name, mapping=mapping
         )
-        result = agent.structured_output(EmitSearch, user_msg)
+        # Invoke with structured_output_model (not the deprecated
+        # structured_output(), which flattens the system prompt to a string and
+        # drops the cache point).
+        result = agent(user_msg, structured_output_model=EmitSearch).structured_output
         logger.info("Generated DSL for index=%s (reason=%s)", index_name, result.reason)
         return json.dumps(result.dsl)

@@ -34,7 +34,7 @@ def test_generate_reads_mapping_and_returns_dsl_string(mock_os, mock_model, mock
         "idx": {"mappings": {"properties": {"status": {"type": "keyword"}}}}
     }
     dsl_obj = {"size": 10, "query": {"term": {"status": "active"}}}
-    mock_agent.return_value.structured_output.return_value = EmitSearch(
+    mock_agent.return_value.return_value.structured_output = EmitSearch(
         reason="status=active -> term", dsl=dsl_obj
     )
 
@@ -47,7 +47,7 @@ def test_generate_reads_mapping_and_returns_dsl_string(mock_os, mock_model, mock
 
     # The mapping was read for the right index and fed into the prompt.
     mock_os.return_value.indices.get_mapping.assert_called_once_with(index="idx")
-    prompt_arg = mock_agent.return_value.structured_output.call_args[0][1]
+    prompt_arg = mock_agent.return_value.call_args[0][0]
     assert "active items" in prompt_arg and "status" in prompt_arg
 
 
@@ -57,7 +57,7 @@ def test_generate_reads_mapping_and_returns_dsl_string(mock_os, mock_model, mock
 def test_bearer_token_forwarded_to_client(mock_os, mock_model, mock_agent):
     BedrockDslGenerator, EmitSearch = _make_generator()
     mock_os.return_value.indices.get_mapping.return_value = {"idx": {}}
-    mock_agent.return_value.structured_output.return_value = EmitSearch(
+    mock_agent.return_value.return_value.structured_output = EmitSearch(
         reason="r", dsl={"query": {"match_all": {}}}
     )
 
@@ -73,7 +73,7 @@ def test_bearer_token_forwarded_to_client(mock_os, mock_model, mock_agent):
 def test_no_token_means_no_auth_header(mock_os, mock_model, mock_agent):
     BedrockDslGenerator, EmitSearch = _make_generator()
     mock_os.return_value.indices.get_mapping.return_value = {"idx": {}}
-    mock_agent.return_value.structured_output.return_value = EmitSearch(
+    mock_agent.return_value.return_value.structured_output = EmitSearch(
         reason="r", dsl={"query": {"match_all": {}}}
     )
 
