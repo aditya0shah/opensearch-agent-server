@@ -66,6 +66,7 @@ from server.rate_limiting import (  # noqa: E402
     setup_rate_limiting,
 )
 from server.request_id_middleware import RequestIdMiddleware  # noqa: E402
+from server.response_formats import wrap_inference_results  # noqa: E402
 from server.run_routes import (  # noqa: E402
     _extract_auth_headers,
     cancel_run_route,
@@ -73,6 +74,7 @@ from server.run_routes import (  # noqa: E402
     get_run_events_route,
     get_run_route,
 )
+
 
 def _init_tracing() -> None:
     """Initialize OpenTelemetry tracing.
@@ -395,6 +397,20 @@ def create_app(config_override: ServerConfig | None = None) -> FastAPI:
             "ag_ui.art_agent_factory_ready",
         )
 
+        # Register the agentic-search agent (NLQ->DSL), reachable via POST /invoke.
+        from agents.agentic_search import create_agentic_search_agent
+
+        orchestrator.register_agent_factory(
+            name="agentic_search",
+            factory=lambda: create_agentic_search_agent(opensearch_url),
+            description="Natural-language query to OpenSearch DSL (non-streaming, via /invoke)",
+        )
+        log_info_event(
+            logger,
+            "✓ agentic_search agent registered (POST /invoke)",
+            "ag_ui.agentic_search_ready",
+        )
+
         yield
 
     app = FastAPI(
@@ -646,27 +662,55 @@ async def invoke(
     Runs the agent to completion and returns the final response as JSON.
     Accepts a string query or message list (Strands Agent interface).
     """
-    body = await request.json()
-    query = body.get("query")
-    messages = body.get("messages")
-    agent_name = body.get("agent")
-    timeout = body.get("timeout", 600)
-
-    if not query and not messages:
+    def _bad_request(message: str) -> JSONResponse:
         return JSONResponse(
             status_code=400,
             content={
-                "error": "Request must include 'query' or 'messages'.",
+                "error": message,
                 "error_type": "ValidationError",
                 "status": "error",
             },
         )
 
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return _bad_request("Request body must be valid JSON.")
+    if not isinstance(body, dict):
+        return _bad_request("Request body must be a JSON object.")
+
+    query = body.get("query")
+    messages = body.get("messages")
+    agent_name = body.get("agent")
+    timeout = body.get("timeout", 600)
+    # Generic extensions: `context` is structured input forwarded verbatim to
+    # context-aware agents (e.g. DSL generation reads `index_name` from it);
+    # `response_format` opts into the ml-commons inference_results envelope so an
+    # ml-commons connector's passthrough can consume the reply. Both default to
+    # today's behavior, so existing callers are unaffected.
+    context = body.get("context")
+    response_format = body.get("response_format")
+
+    if not query and not messages:
+        return _bad_request("Request must include 'query' or 'messages'.")
+    if context is not None and not isinstance(context, dict):
+        return _bad_request("'context' must be a JSON object.")
+
     if messages:
+        if not isinstance(messages, list) or not all(
+            isinstance(m, dict) and isinstance(m.get("role"), str)
+            and isinstance(m.get("content"), str)
+            for m in messages
+        ):
+            return _bad_request(
+                "'messages' must be a list of {role: str, content: str} objects."
+            )
         prompt: str | list[dict] = [
             {"role": m["role"], "content": [{"text": m["content"]}]}
             for m in messages
         ]
+    elif not isinstance(query, str):
+        return _bad_request("'query' must be a string.")
     else:
         prompt = query
 
@@ -678,7 +722,10 @@ async def invoke(
             agent_name=agent_name,
             headers=forwarded_headers,
             timeout=timeout,
+            context=context,
         )
+        if response_format == "inference_results":
+            return JSONResponse(content=wrap_inference_results(response_text))
         return JSONResponse(content={"response": response_text, "status": "success"})
     except TimeoutError as e:
         return JSONResponse(
@@ -704,6 +751,7 @@ async def invoke(
                 "status": "error",
             },
         )
+
 
 if __name__ == "__main__":
     import uvicorn
