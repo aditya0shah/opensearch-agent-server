@@ -8,6 +8,7 @@
 ### Fixed
 - Default agent now respects `BEDROCK_INFERENCE_PROFILE_ARN` env var instead of silently falling back to a hardcoded Sonnet 4 model (fixes #94)
 - Fix credential cross-contamination under concurrent requests
+- Bump mcp from 1.26.0 to 1.28.1 to address CVE-2026-59950, CVE-2026-52870, and CVE-2026-52869 (#95)
 ### Removed
 
 ## [0.2.0] - 2026-04-10

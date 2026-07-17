@@ -35,7 +35,7 @@ classifiers = [
 ]
 dependencies = [
     "opensearch-py",
-    "mcp>=1.9.0",
+    "mcp>=1.28.1",
     "strands-agents[ollama,otel]>=1.30.0",
     "openinference-instrumentation-bedrock",
     "python-dotenv",
