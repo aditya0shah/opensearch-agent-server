@@ -1,11 +1,12 @@
 """Direct-DSL generation: the model authors the whole ``_search`` body.
 
 The default generation strategy. It gives the model the index mapping and one
-sample document, then has it author a complete OpenSearch query body via a single
-forced tool call (see :func:`forced_tool_fill`):
+sample document, then has it author a complete OpenSearch query body:
 
-- The forced tool call keeps the model's ``EmitSearch`` rationale inside the tool
-  input rather than as leading free text.
+- On Bedrock, a single forced tool call (see :func:`forced_tool_fill`) keeps the
+  model's ``EmitSearch`` rationale inside the tool input rather than as leading
+  free text. Other providers (e.g. Ollama) use the portable strands
+  ``structured_output`` path, which does not support forcing ``toolChoice``.
 - The sample document supplies real field values (e.g. exact keyword/enum values),
   which the mapping alone does not, helping the model choose the right field and term.
 """
@@ -16,13 +17,18 @@ import json
 import logging
 from typing import Any
 
+from strands import Agent
+
 from agents.agentic_search.prompts.direct_dsl import (
     SYSTEM_BLOCKS,
     USER_PROMPT,
     EmitSearch,
 )
 from agents.agentic_search.strategies.base import GenerationRequest
-from agents.agentic_search.strategies.forced_tool import forced_tool_fill
+from agents.agentic_search.strategies.forced_tool import (
+    forced_tool_fill,
+    supports_forced_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +73,8 @@ class DirectDslStrategy:
 
         ``SYSTEM_BLOCKS`` carries the rules and examples behind a cache point, so on
         warm calls only the per-request tail (mapping, sample document, question) is
-        billed.
+        billed. Uses the forced-tool path on Bedrock and the portable strands
+        ``structured_output`` path elsewhere.
         """
         sample = _fetch_sample_document(request.client, request.index_name)
         user_msg = USER_PROMPT.format(
@@ -76,13 +83,31 @@ class DirectDslStrategy:
             mapping=request.mapping,
             sample_document=sample or "(none available)",
         )
-        result = forced_tool_fill(
-            model=request.model,
-            schema_model=EmitSearch,
-            system_blocks=SYSTEM_BLOCKS,
-            user_message=user_msg,
-        )
+        result = self._emit(request.model, user_msg)
         logger.info(
             "Generated DSL for index=%s (reason=%s)", request.index_name, result.reason
         )
         return result.dsl
+
+    @staticmethod
+    def _emit(model: Any, user_msg: str) -> EmitSearch:
+        """Produce the ``EmitSearch`` result, using the best path for the provider.
+
+        Bedrock forces the tool call (no leading free text); other providers fall
+        back to the portable strands ``structured_output`` path, which handles the
+        provider differences but cannot force ``toolChoice``.
+        """
+        if supports_forced_tool(model):
+            return forced_tool_fill(
+                model=model,
+                schema_model=EmitSearch,
+                system_blocks=SYSTEM_BLOCKS,
+                user_message=user_msg,
+            )
+        agent = Agent(
+            model=model,
+            system_prompt=SYSTEM_BLOCKS,
+            tools=[],
+            callback_handler=None,
+        )
+        return agent(user_msg, structured_output_model=EmitSearch).structured_output

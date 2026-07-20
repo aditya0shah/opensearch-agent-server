@@ -5,6 +5,15 @@ the tool call immediately, with no leading free text. The high-level strands
 ``Agent`` API does not expose ``toolChoice``, so the call is driven directly; this
 also means the SDK's automatic retry-on-non-tool-response is not available, so an
 empty or malformed tool call raises ``ValueError`` for the caller to handle.
+
+This is a workaround. It is Bedrock-specific — it uses the botocore
+``converse_stream`` client directly — so callers must gate it with
+:func:`supports_forced_tool` and use the portable strands ``structured_output``
+path for other providers (e.g. Ollama). It can be removed once strands exposes
+``tool_choice`` on ``structured_output``.
+
+Tracking: https://github.com/opensearch-project/opensearch-agent-server/issues/149
+Upstream: https://github.com/strands-agents/harness-sdk/issues/3336
 """
 
 from __future__ import annotations
@@ -16,6 +25,17 @@ from pydantic import BaseModel, ValidationError
 from strands.tools.structured_output import convert_pydantic_to_tool_spec
 
 logger = logging.getLogger(__name__)
+
+
+def supports_forced_tool(model: Any) -> bool:
+    """Whether ``model`` supports the forced-tool path (Bedrock ``converse_stream``).
+
+    Only Bedrock models expose the botocore ``converse_stream`` client this path
+    drives directly. Other providers (e.g. Ollama) must use the portable strands
+    ``structured_output`` path instead.
+    """
+    client = getattr(model, "client", None)
+    return client is not None and hasattr(client, "converse_stream")
 
 
 def forced_tool_fill(
