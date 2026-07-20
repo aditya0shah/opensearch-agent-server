@@ -2,8 +2,8 @@
 
 The system prompt is a large, static rules-and-examples prefix. It is sent as
 Bedrock content blocks with a trailing cache point so it is served from cache on
-warm calls (Bedrock only; harmlessly ignored elsewhere); the per-request mapping
-and question go in the user message, after the cached prefix.
+warm calls (Bedrock only; harmlessly ignored elsewhere); the per-request mapping,
+sample document, and question go in the user message, after the cached prefix.
 """
 
 from __future__ import annotations
@@ -287,17 +287,20 @@ EXAMPLES = (
 SYSTEM_PROMPT = PROMPT_PREFIX + "\n\n" + OUTPUT_FORMAT_INSTRUCTIONS + "\n" + EXAMPLES
 
 # Sent as content blocks with a trailing cache point so Bedrock caches the static
-# prefix (~5-minute TTL) and only the per-request tail (mapping + question, in the
-# user message) is billed on warm calls. The cache point is a no-op off Bedrock.
+# prefix (~5-minute TTL) and only the per-request tail (mapping + sample + question,
+# in the user message) is billed on warm calls. The cache point is a no-op off Bedrock.
 SYSTEM_BLOCKS: list[SystemContentBlock] = [
     {"text": SYSTEM_PROMPT},
     {"cachePoint": {"type": "default"}},
 ]
 
+# The mapping gives field types; the sample document adds one real indexed doc so
+# the model can see actual field values (e.g. exact keyword/enum values), not just types.
 USER_PROMPT = """\
 Question: {question}
 Index: {index_name}
 Mapping: {mapping}
+Sample document from index: {sample_document}
 
 Emit the OpenSearch _search body for this question.
 """
