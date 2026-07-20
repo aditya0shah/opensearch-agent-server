@@ -71,13 +71,15 @@ class AgenticSearchAgent:
         if not index_name:
             raise ValueError("context.index_name is required")
 
-        strategy_name = context.get("strategy", DEFAULT_STRATEGY)
-        strategy: GenerationStrategy | None = STRATEGIES.get(strategy_name)
-        if strategy is None:
-            raise ValueError(f"unknown strategy '{strategy_name}'")
+        strategy = self._select_strategy(context)
 
         client = self._client(auth_token)
-        mapping = json.dumps(client.indices.get_mapping(index=index_name))
+        # Skip the per-query mapping fetch when the strategy doesn't need it
+        # (template fill fills typed params and uses no mapping). Strategies that
+        # omit `needs_mapping` are treated as needing it, so existing behavior holds.
+        mapping = ""
+        if getattr(strategy, "needs_mapping", True):
+            mapping = json.dumps(client.indices.get_mapping(index=index_name))
         dsl = strategy.generate(
             GenerationRequest(
                 question=prompt,
@@ -95,6 +97,23 @@ class AgenticSearchAgent:
         if not isinstance(dsl, dict):
             raise ValueError("strategy did not return a _search body object")
         return dsl
+
+    @staticmethod
+    def _select_strategy(context: dict[str, Any]) -> GenerationStrategy:
+        """Pick the generation strategy for this request.
+
+        An explicit ``context.strategy`` always wins. Otherwise the presence of
+        ``template_id`` is the mode switch: present -> ``template_fill``; absent ->
+        the free-DSL default. Template mode is opt-in and additive — callers that
+        send no ``template_id`` are unaffected.
+        """
+        strategy_name = context.get("strategy")
+        if strategy_name is None:
+            strategy_name = "template_fill" if context.get("template_id") else DEFAULT_STRATEGY
+        strategy: GenerationStrategy | None = STRATEGIES.get(strategy_name)
+        if strategy is None:
+            raise ValueError(f"unknown strategy '{strategy_name}'")
+        return strategy
 
     def _client(self, auth_token: str | None) -> OpenSearch:
         # Forward the caller's bearer token per request when present; otherwise
