@@ -21,17 +21,32 @@ FILL_SYSTEM_PROMPT = (
     "question clearly implies; leave everything else unset — do not guess.\n"
     "Put ONLY content/topic words in any free-text query parameter — never counts, "
     "filters, sort terms, or field names.\n"
-    "For enum parameters, choose only from the options that parameter allows."
+    "For enum parameters, choose only from the options that parameter allows.\n"
+    "If the question needs something these parameters cannot express — a field not "
+    "listed here, prefix/wildcard/fuzzy matching, aggregations, an unsupported range, "
+    "or custom scoring — set cannot_express=true and leave the other parameters unset. "
+    "Do not force an approximate fill; abstaining routes the question to a more capable "
+    "path."
 )
+
+def build_fill_system_blocks(system_prompt: str) -> list[SystemContentBlock]:
+    """Wrap a system-prompt string in the standard content blocks + cache point.
+
+    Factored out so a prompt-sweep experiment can build blocks from an alternate
+    prompt string; the module default :data:`FILL_SYSTEM_BLOCKS` is this applied to
+    :data:`FILL_SYSTEM_PROMPT`.
+    """
+    return [
+        {"text": system_prompt},
+        {"cachePoint": {"type": "default"}},
+    ]
+
 
 # Sent as content blocks with a trailing cache point, mirroring the direct-DSL
 # SYSTEM_BLOCKS. The fill prompt is small, so caching is a minor lever here (a short
 # prefix on a fast model may fall under the per-checkpoint token floor); the point
 # is harmless and keeps the two paths symmetric.
-FILL_SYSTEM_BLOCKS: list[SystemContentBlock] = [
-    {"text": FILL_SYSTEM_PROMPT},
-    {"cachePoint": {"type": "default"}},
-]
+FILL_SYSTEM_BLOCKS: list[SystemContentBlock] = build_fill_system_blocks(FILL_SYSTEM_PROMPT)
 
 FILL_USER_PROMPT = """\
 Question: {question}

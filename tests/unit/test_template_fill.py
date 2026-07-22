@@ -139,6 +139,40 @@ def test_happy_path_fills_renders_and_unwraps(monkeypatch):
     assert cache.calls == ["product_search"]
 
 
+def test_cannot_express_routes_to_fallback(monkeypatch):
+    # The model sets the abstain field -> skip render, route to free-DSL. The abstain
+    # field must never reach the renderer.
+    fb = _StubFallback()
+    client = _StubRenderClient()
+    strat = TemplateFillStrategy(fallback=fb, schema_cache=_StubSchemaCache(schema=_product_schema_obj()))
+    filled = _product_schema_obj().fill_model.model_validate(
+        {"lex_query": "x", "cannot_express": True}
+    )
+    monkeypatch.setattr(tf_module, "forced_tool_fill", lambda **kw: filled)
+
+    out = strat.generate(_make_request(client, mapping='{"m":1}'))
+
+    assert out == {"query": {"match_all": {}}}  # the fallback's result
+    assert len(fb.calls) == 1
+    assert client.render_calls == []  # never rendered
+
+
+def test_cannot_express_false_renders_normally(monkeypatch):
+    # abstain=False is the happy path: the synthetic field is stripped, render proceeds.
+    client = _StubRenderClient()
+    strat = TemplateFillStrategy(schema_cache=_StubSchemaCache(schema=_product_schema_obj()))
+    filled = _product_schema_obj().fill_model.model_validate(
+        {"lex_query": "shoes", "cannot_express": False}
+    )
+    monkeypatch.setattr(tf_module, "forced_tool_fill", lambda **kw: filled)
+
+    out = strat.generate(_make_request(client))
+
+    assert out == RENDERED_DSL
+    # cannot_express is stripped before the params reach the renderer.
+    assert client.render_calls == [("product_search", {"params": {"lex_query": "shoes"}})]
+
+
 def test_render_output_string_is_parsed(monkeypatch):
     # Some client versions return template_output as a JSON string.
     client = _StubRenderClient(template_output=json.dumps(RENDERED_DSL))

@@ -31,15 +31,37 @@ from typing import Any
 from agents.agentic_search.prompts.template_fill import (
     FILL_SYSTEM_BLOCKS,
     FILL_USER_PROMPT,
+    build_fill_system_blocks,
 )
 from agents.agentic_search.strategies.base import GenerationRequest, GenerationStrategy
 from agents.agentic_search.strategies.direct_dsl import DirectDslStrategy
 from agents.agentic_search.strategies.forced_tool import forced_tool_fill
-from agents.agentic_search.template_schema import TemplateSchemaCache
+from agents.agentic_search.template_schema import (
+    CANNOT_EXPRESS_FIELD,
+    TemplateSchemaCache,
+    build_fill_model,
+)
 
 logger = logging.getLogger(__name__)
 
 TEMPLATE_ID_KEY = "template_id"
+
+# Experiment-only context keys for the prompt sweep. Production requests never send
+# these; when absent the strategy uses the module-default prompt + escape hatch. They
+# let a benchmark arm A/B a system prompt, user prompt, and abstain description without
+# restarting the server. Namespaced with a leading underscore to signal "internal".
+_SWEEP_SYSTEM_KEY = "_sweep_system_prompt"
+_SWEEP_USER_KEY = "_sweep_user_prompt"
+_SWEEP_HATCH_KEY = "_sweep_cannot_express_desc"
+
+
+class _TemplateCannotExpress(Exception):
+    """The model abstained: the question needs a capability this template lacks.
+
+    Raised on the happy path so :meth:`TemplateFillStrategy.generate` routes to the
+    free-DSL fallback — the same handling as a structural failure, but triggered by the
+    model's own judgment rather than a broken render (§6).
+    """
 
 
 class TemplateFillStrategy:
@@ -77,6 +99,14 @@ class TemplateFillStrategy:
 
         try:
             return self._fill_and_render(request, template_id)
+        except _TemplateCannotExpress:
+            # Not a failure: the model judged the question outside the template's
+            # expressive range and asked for the free-DSL path. Expected and healthy.
+            logger.info(
+                "Template %s cannot express the question; routing to free-DSL",
+                template_id,
+            )
+            return self._fallback_generate(request)
         except Exception as e:  # noqa: BLE001 - any fill/render failure degrades to free-DSL
             logger.warning(
                 "Template fill failed for template_id=%s (%s); falling back to free-DSL",
@@ -92,11 +122,28 @@ class TemplateFillStrategy:
         """
         schema = self._schema_cache.get(template_id, request.client)
 
+        # Prompt-sweep overrides (experiment-only; absent on the production path). A
+        # custom abstain description means rebuilding the model from the cached raw
+        # param_schema — a cheap in-memory build, no extra cluster read.
+        ctx = request.context
+        hatch_desc = ctx.get(_SWEEP_HATCH_KEY)
+        fill_model = (
+            build_fill_model(schema.param_schema, cannot_express_desc=hatch_desc)
+            if hatch_desc
+            else schema.fill_model
+        )
+        system_blocks = (
+            build_fill_system_blocks(ctx[_SWEEP_SYSTEM_KEY])
+            if ctx.get(_SWEEP_SYSTEM_KEY)
+            else FILL_SYSTEM_BLOCKS
+        )
+        user_prompt = ctx.get(_SWEEP_USER_KEY) or FILL_USER_PROMPT
+
         filled = forced_tool_fill(
             model=request.model,
-            schema_model=schema.fill_model,
-            system_blocks=FILL_SYSTEM_BLOCKS,
-            user_message=FILL_USER_PROMPT.format(question=request.question),
+            schema_model=fill_model,
+            system_blocks=system_blocks,
+            user_message=user_prompt.format(question=request.question),
         )
         # Only params the model actually filled — dropping unset optionals lets the
         # body's inverted-section defaults ({{^size}}10{{/size}}) and optional-clause
@@ -104,6 +151,14 @@ class TemplateFillStrategy:
         # would render an empty slot and break the JSON. ``by_alias`` recovers the real
         # param names (fields are stored under sanitized identifiers, real name = alias).
         params = filled.model_dump(by_alias=True, exclude_none=True)
+
+        # Escape hatch: the synthetic abstain field (never a real Mustache param) lets
+        # the model decline a question this template can't express, instead of forcing a
+        # fill that renders valid-but-wrong DSL. Strip it either way — it must not reach
+        # the renderer — and route an abstention to the free-DSL fallback (§6).
+        abstained = bool(params.pop(CANNOT_EXPRESS_FIELD, False))
+        if abstained:
+            raise _TemplateCannotExpress(template_id)
 
         rendered = self._render(request.client, template_id, params)
         logger.info(

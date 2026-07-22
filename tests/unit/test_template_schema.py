@@ -12,6 +12,7 @@ import pytest
 from agents.agentic_search import template_schema as ts_module
 from agents.agentic_search.template_schema import (
     AGENTIC_SEARCH_TEMPLATES_INDEX,
+    CANNOT_EXPRESS_FIELD,
     TemplateSchemaCache,
     build_fill_model,
 )
@@ -75,21 +76,28 @@ def test_build_model_ignores_extra_params():
     assert "not_a_param" not in inst.model_dump(by_alias=True, exclude_none=True)
 
 
+def _params(inst, **dump_kwargs):
+    """Dump a fill instance minus the synthetic abstain field (as the strategy does)."""
+    dumped = inst.model_dump(by_alias=True, **dump_kwargs)
+    dumped.pop(CANNOT_EXPRESS_FIELD, None)
+    return dumped
+
+
 def test_build_model_number_preserves_int():
     # A "number"-typed param filled with an integer must render as an int, not 5.0
     # (OpenSearch rejects a float where an int is expected, e.g. size).
     model = build_fill_model({"size": {"type": "number", "required": True}})
-    dumped = model.model_validate({"size": 5}).model_dump(by_alias=True)
+    dumped = _params(model.model_validate({"size": 5}))
     assert dumped == {"size": 5}
     assert isinstance(dumped["size"], int)
     # A decimal still stays a float.
-    assert model.model_validate({"size": 5.5}).model_dump(by_alias=True) == {"size": 5.5}
+    assert _params(model.model_validate({"size": 5.5})) == {"size": 5.5}
 
 
 def test_build_model_coerces_and_types():
     model = build_fill_model(PRODUCT_SCHEMA)
     inst = model.model_validate({"lex_query": "shoes", "size": 5, "price_max": 100})
-    dumped = inst.model_dump(by_alias=True, exclude_none=True)
+    dumped = _params(inst, exclude_none=True)
     # size is "integer" -> stays int; price_max is "float" -> 100.0.
     assert dumped == {"lex_query": "shoes", "size": 5, "price_max": 100.0}
 
@@ -107,7 +115,7 @@ def test_build_model_awkward_param_names():
     inst = model.model_validate(
         {"author.first_name": "John", "model_id": "m1", "_internal": "z", "class": "c"}
     )
-    dumped = inst.model_dump(by_alias=True, exclude_none=True)
+    dumped = _params(inst, exclude_none=True)
     assert dumped == {
         "author.first_name": "John",
         "model_id": "m1",
@@ -123,7 +131,7 @@ def test_build_model_colliding_sanitized_names_stay_distinct():
         "a-b": {"type": "string", "required": True},
     }
     model = build_fill_model(schema)
-    dumped = model.model_validate({"a.b": "x", "a-b": "y"}).model_dump(by_alias=True)
+    dumped = _params(model.model_validate({"a.b": "x", "a-b": "y"}))
     assert dumped == {"a.b": "x", "a-b": "y"}
 
 
@@ -141,6 +149,37 @@ def test_build_model_unknown_type_falls_back_to_string():
     model = build_fill_model({"weird": {"type": "geo_point", "required": True}})
     inst = model.model_validate({"weird": "anything"})
     assert inst.weird == "anything"
+
+
+# --- cannot_express escape hatch --------------------------------------------
+
+
+def test_build_model_adds_cannot_express_field():
+    # The synthetic abstain field is added to every model, optional, default False,
+    # and is not in `required` (so it costs nothing on the happy path).
+    model = build_fill_model(PRODUCT_SCHEMA)
+    assert CANNOT_EXPRESS_FIELD in model.model_fields
+    assert CANNOT_EXPRESS_FIELD not in model.model_json_schema()["required"]
+    inst = model.model_validate({"lex_query": "x"})
+    assert getattr(inst, CANNOT_EXPRESS_FIELD) is False
+
+
+def test_build_model_cannot_express_can_be_set():
+    model = build_fill_model(PRODUCT_SCHEMA)
+    inst = model.model_validate({"lex_query": "x", CANNOT_EXPRESS_FIELD: True})
+    assert getattr(inst, CANNOT_EXPRESS_FIELD) is True
+    # It round-trips by alias (plain identifier, so alias == field name).
+    assert inst.model_dump(by_alias=True)[CANNOT_EXPRESS_FIELD] is True
+
+
+def test_build_model_real_param_named_cannot_express_wins():
+    # A template that literally names a param `cannot_express` keeps its real param
+    # (the escape hatch is disabled for that template rather than shadowing the param).
+    schema = {CANNOT_EXPRESS_FIELD: {"type": "string", "required": True}}
+    model = build_fill_model(schema)
+    # The field is the real (string) param, not the synthetic bool.
+    inst = model.model_validate({CANNOT_EXPRESS_FIELD: "hello"})
+    assert getattr(inst, CANNOT_EXPRESS_FIELD) == "hello"
 
 
 # --- TemplateSchemaCache ----------------------------------------------------

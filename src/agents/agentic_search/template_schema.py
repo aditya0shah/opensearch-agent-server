@@ -44,6 +44,34 @@ AGENTIC_SEARCH_TEMPLATES_INDEX = ".plugins-ml-agentic-search-templates"
 # How long a built model is trusted before the next query re-reads the schema doc.
 DEFAULT_SCHEMA_TTL_SECONDS = 60.0
 
+# Synthetic abstain field added to every ``FillTemplate`` model (not a real Mustache
+# param). It gives the model an escape hatch: when the question needs a capability the
+# template can't express, it sets this instead of force-filling params into a query
+# that would render valid-but-wrong DSL. The strategy routes such fills to the free-DSL
+# fallback — recovering the accuracy a forced fill would otherwise silently lose (§6).
+# Optional (default False), so it costs ~0 output tokens on the happy path and never
+# reaches ``_render/template``.
+#
+# The description below enumerates concrete abstain triggers rather than describing the
+# idea abstractly. A 2026-07-21 prompt sweep (sbv2-catalog-northpeak, 32 Qs) found this
+# "strict/enumerated" wording the best of the variants tried: on a capable template it
+# lifted accuracy to 22/32 (beating the free-DSL baseline's 20/32 while staying ~31%
+# faster p50), and it was harmless on a weak template. Vaguer ("set true when unsure")
+# and heavier ("reason step by step first") wordings both *over-abstained* and lost
+# accuracy — so the enumeration is load-bearing; edit it with a re-run, not by feel.
+CANNOT_EXPRESS_FIELD = "cannot_express"
+_CANNOT_EXPRESS_DESCRIPTION = (
+    "Set true when the question needs a capability NOT among these parameters. "
+    "Concretely set it true if the question: (a) restricts text matching to ONE "
+    "specific field (e.g. 'in the title', 'in the name') and no parameter isolates that "
+    "field; (b) demands an EXACT contiguous phrase / literal wording in a field and no "
+    "phrase parameter exists; (c) asks to RANK or BOOST by a signal (most popular, "
+    "trending, boost recent/newer, custom relevance) and no parameter or sort option "
+    "expresses that ranking; (d) asks for a COUNT-only answer, aggregation, faceting, or "
+    "grouping; (e) references a field, similarity ('products like X'), or predicate that "
+    "has no matching parameter. Otherwise leave it false and fill the parameters."
+)
+
 # param-schema "type" -> Python annotation for the non-enum case. ``number`` is
 # ``int | float`` (not bare ``float``) so an integer fill like ``size:5`` renders as
 # ``5`` — a bare ``float`` would coerce it to ``5.0``, which OpenSearch rejects for
@@ -124,7 +152,12 @@ def _safe_field_name(param_name: str, used: set[str]) -> str:
     return candidate
 
 
-def build_fill_model(param_schema: dict[str, Any], *, model_name: str = FILL_MODEL_NAME) -> type:
+def build_fill_model(
+    param_schema: dict[str, Any],
+    *,
+    model_name: str = FILL_MODEL_NAME,
+    cannot_express_desc: str | None = None,
+) -> type:
     """Build a Pydantic model whose fields are the template's params, 1:1.
 
     Each param entry is ``{type, required?, enum?, description?}``. Required params
@@ -140,6 +173,12 @@ def build_fill_model(param_schema: dict[str, Any], *, model_name: str = FILL_MOD
     hallucinated key doesn't fail the whole fill — an unknown key is simply dropped,
     and the render-parse guard still backstops a bad result.
 
+    Args:
+        cannot_express_desc: Optional override for the synthetic abstain field's
+            description. ``None`` uses the module default. Supplied by prompt-sweep
+            experiments to tune when the model abstains; the production path leaves it
+            ``None``.
+
     Raises:
         ValueError: The schema is empty or a param entry is malformed.
     """
@@ -148,6 +187,17 @@ def build_fill_model(param_schema: dict[str, Any], *, model_name: str = FILL_MOD
 
     fields: dict[str, tuple[Any, Any]] = {}
     used_names: set[str] = set()
+    # Reserve the abstain field's name so no real param can be sanitized onto it.
+    # A template whose author literally named a param ``cannot_express`` keeps that
+    # param (it maps to a distinct safe name) and simply forgoes the escape hatch.
+    add_abstain = CANNOT_EXPRESS_FIELD not in param_schema
+    if add_abstain:
+        used_names.add(CANNOT_EXPRESS_FIELD)
+    else:
+        logger.warning(
+            "template has a real param named '%s'; abstain escape hatch disabled",
+            CANNOT_EXPRESS_FIELD,
+        )
     for name, spec in param_schema.items():
         if not isinstance(spec, dict):
             raise ValueError(f"param '{name}' schema entry must be an object")
@@ -163,6 +213,15 @@ def build_fill_model(param_schema: dict[str, Any], *, model_name: str = FILL_MOD
                 annotation | None,
                 Field(default=None, description=description, alias=name),
             )
+
+    # Synthetic abstain field: optional bool, default False. Not a Mustache param, so
+    # the strategy strips it before rendering. Named identically to its alias (a plain
+    # identifier), so it survives ``model_dump(by_alias=True)`` for the strategy to read.
+    if add_abstain:
+        fields[CANNOT_EXPRESS_FIELD] = (
+            bool,
+            Field(default=False, description=cannot_express_desc or _CANNOT_EXPRESS_DESCRIPTION),
+        )
 
     model = build_pydantic_model(
         model_name,
