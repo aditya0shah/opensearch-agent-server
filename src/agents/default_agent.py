@@ -13,6 +13,10 @@ from mcp.client.streamable_http import streamable_http_client
 from strands import Agent, AgentSkills, Skill
 from strands.tools.mcp import MCPClient
 
+from agents.context_management import (
+    context_management_plugins,
+    create_conversation_manager,
+)
 from server.constants import DEFAULT_MCP_SERVER_URL
 from utils.logging_helpers import get_logger, log_info_event
 from utils.model_factory import create_model
@@ -121,8 +125,8 @@ def create_default_agent(
 
     tools = list(mcp_client.list_tools_sync())
 
-    # Prepare plugins list with AgentSkills if skills are available
-    plugins = []
+    # Prepare plugins list: context management (ContextOffloader) plus AgentSkills if any.
+    plugins = context_management_plugins()
     if skills:
         agent_skills_plugin = LoggingAgentSkills(skills=skills)
         plugins.append(agent_skills_plugin)
@@ -140,6 +144,7 @@ def create_default_agent(
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         tools=tools,
         plugins=plugins,
+        conversation_manager=create_conversation_manager(),
     )
 
     # ag_ui_strands rebuilds a fresh per-thread agent from this template, forwarding

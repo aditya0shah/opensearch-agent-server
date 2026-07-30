@@ -4,6 +4,7 @@
 ### Added
 - Support using Ollama as model provider
 - PPL reference skill and skills auto-discovery for the default agent
+- Context management across all agents: proactive conversation summarization and offloading of large tool results, plus an API-boundary cap on client-returned tool results (#138)
 - Load additional skills from `~/.config/opensearch-agent-server/skills/` (default) or any paths set in the `AG_UI_SKILL_PATHS` env var (PATH-style: `:`-separated on POSIX, `;`-separated on Windows)
 - Support non-streaming `/invoke` endpoint
 - `agentic_search` agent (natural-language query -> OpenSearch DSL) reachable via `POST /invoke`, with a per-request generation strategy (`context.strategy`, default `direct_dsl`) and example ml-commons connector/FLOW-agent wiring

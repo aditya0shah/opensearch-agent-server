@@ -1,9 +1,8 @@
 """Agent Orchestrator — routes requests to AG-UI Strands agent wrappers.
 
-``ag_ui_strands.StrandsAgent`` instances are created once per agent name and
-then cached so that the per-thread ``StrandsAgentCore`` (and its
-``ConversationManager``) survives across requests, giving the agent persistent
-conversation memory.  Authentication is handled by :class:`~utils.obo_context.OboAuth`
+A fresh ``ag_ui_strands.StrandsAgent`` is created per request to isolate
+credentials across concurrent tenants; its MCP client is stopped once the run
+finishes.  Authentication is handled by :class:`~utils.obo_context.OboAuth`
 instances stored on each agent's httpx client — the orchestrator calls
 ``set_token()`` before each run to inject fresh credentials.
 """
@@ -20,6 +19,7 @@ from ag_ui_strands import StrandsAgent as AGUIStrandsAgent
 from ag_ui_strands.config import StrandsAgentConfig
 from strands import Agent as StrandsAgentCore
 
+from agents.context_management import apply_context_management
 from orchestrator.router import PageContextRouter
 from utils.logging_helpers import get_logger, log_debug_event, log_info_event
 
@@ -28,6 +28,20 @@ logger = get_logger(__name__)
 # A factory callable that returns a pre-configured Strands Agent.
 # Headers are no longer passed to the factory — OboAuth handles auth.
 AgentFactory = Callable[[], StrandsAgentCore]
+
+
+class _ContextManagedThreadAgents(dict):
+    """Per-thread agent cache that re-applies context management on insert.
+
+    ``ag_ui_strands`` (0.1.1) rebuilds each per-thread ``Agent`` with ``conversation_manager``,
+    ``hooks``, and ``plugins`` dropped; intercepting the wrapper's insert re-applies the
+    summarizing manager and the ``ContextOffloader`` plugin, fresh per thread (see
+    ``agents.context_management``, #138).
+    """
+
+    def __setitem__(self, thread_id: str, agent: StrandsAgentCore) -> None:
+        apply_context_management(agent)
+        super().__setitem__(thread_id, agent)
 
 
 def _extract_app_id_from_context(context: list) -> str | None:
@@ -197,6 +211,11 @@ class AgentOrchestrator:
             name=agent_name,
             description=factory_info["description"],
             config=factory_info["config"],
+        )
+        # AGUIStrandsAgent rebuilds each per-thread Agent with conversation_manager/hooks
+        # dropped, so re-apply context management as those per-thread agents are inserted (#138).
+        agui_agent._agents_by_thread = _ContextManagedThreadAgents(
+            agui_agent._agents_by_thread
         )
 
         token = _extract_bearer_token(headers)
