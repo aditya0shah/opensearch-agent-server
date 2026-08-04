@@ -46,4 +46,11 @@ class GenerationStrategy(Protocol):
 
     name: str
 
+    # Whether the agent should fetch the index mapping onto the request before
+    # dispatching. Free-DSL strategies need it; template fill does not (it fills
+    # typed params, no mapping), so it declares ``False`` to skip the per-query
+    # fetch. Absent on a strategy => treated as ``True``, so existing strategies
+    # are unaffected.
+    needs_mapping: bool
+
     def generate(self, request: GenerationRequest) -> dict[str, Any]: ...

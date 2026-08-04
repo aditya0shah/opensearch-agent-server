@@ -8,6 +8,8 @@
 
 - :mod:`.direct_dsl` — rules, examples, ``EmitSearch`` schema, and cached system
   blocks for free-DSL generation (the default strategy).
+- :mod:`.template_fill` — the small prompt and ``FillTemplate`` tool name for
+  search-template fill.
 
 Strategies import their own prompt set from the submodule directly. Only
 ``FALLBACK_DSL`` is re-exported here, since the agent shell returns it on any
