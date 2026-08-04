@@ -53,15 +53,16 @@ DEFAULT_SCHEMA_TTL_SECONDS = 60.0
 # in a prompt sweep. Re-run the sweep before editing.
 CANNOT_EXPRESS_FIELD = "cannot_express"
 _CANNOT_EXPRESS_DESCRIPTION = (
-    "Set true when the question needs a capability NOT among these parameters. "
-    "Concretely set it true if the question: (a) restricts text matching to ONE "
-    "specific field (e.g. 'in the title', 'in the name') and no parameter isolates that "
-    "field; (b) demands an EXACT contiguous phrase / literal wording in a field and no "
-    "phrase parameter exists; (c) asks to RANK or BOOST by a signal (most popular, "
-    "trending, boost recent/newer, custom relevance) and no parameter or sort option "
-    "expresses that ranking; (d) asks for a COUNT-only answer, aggregation, faceting, or "
-    "grouping; (e) references a field, similarity ('products like X'), or predicate that "
-    "has no matching parameter. Otherwise leave it false and fill the parameters."
+    "Set true when the question needs a capability NONE of these parameters provide. "
+    "Set it true if the question: "
+    "(a) restricts text matching to ONE specific field ('in the title/name') and no parameter isolates that field; "
+    "(b) needs an EXACT contiguous phrase and no phrase parameter exists; "
+    "(c) asks to RANK, BOOST, PROMOTE, DEMOTE, PUSH UP/DOWN, or DEPRIORITIZE by a signal, or apply custom relevance/decay, and no parameter or sort option expresses it; "
+    "(d) asks HOW MANY / a COUNT / total / 'per <group>' / distribution / bucketed ranges / any aggregation or faceting (these need size:0 or an agg tree no parameter provides); "
+    "(e) filters a geographic SHAPE relationship (a polygon/rectangle/bounding-box CONTAINS, WITHIN, INTERSECTS, or 'entirely inside/overlaps' an area) and only a point-radius distance parameter exists; "
+    "(f) matches on multiple values combined with OR across DIFFERENT fields; "
+    "(g) references a field, similarity ('items like X'), or predicate with no matching parameter. "
+    "Do NOT set it true for a plain filter/range/sort the parameters already cover. Otherwise leave it false and fill the parameters."
 )
 
 # param-schema "type" -> Python annotation for the non-enum case. ``number`` is

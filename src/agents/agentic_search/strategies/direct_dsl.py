@@ -3,9 +3,9 @@
 The default generation strategy. It gives the model the index mapping and one
 sample document, then has it author a complete OpenSearch query body:
 
-- On Bedrock, a single forced tool call (see :func:`forced_tool_fill`) keeps the
-  model's ``EmitSearch`` rationale inside the tool input rather than as leading
-  free text. Other providers (e.g. Ollama) use the portable strands
+- On Bedrock, a single forced tool call (see :func:`forced_tool_fill`) makes the
+  model emit the ``EmitSearch`` tool input immediately, with no leading free
+  text. Other providers (e.g. Ollama) use the portable strands
   ``structured_output`` path, which does not support forcing ``toolChoice``.
 - The sample document supplies real field values (e.g. exact keyword/enum values),
   which the mapping alone does not, helping the model choose the right field and term.
@@ -84,9 +84,7 @@ class DirectDslStrategy:
             sample_document=sample or "(none available)",
         )
         result = self._emit(request.model, user_msg)
-        logger.info(
-            "Generated DSL for index=%s (reason=%s)", request.index_name, result.reason
-        )
+        logger.info("Generated DSL for index=%s", request.index_name)
         return result.dsl
 
     @staticmethod
