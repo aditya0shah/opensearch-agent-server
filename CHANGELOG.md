@@ -11,6 +11,9 @@
 - `/invoke` `context` (structured input forwarded to the agent) and `response_format` (opt-in ml-commons `inference_results` envelope) request fields
 - `template_fill` generation strategy for `agentic_search`: fills a registered search template's Mustache parameters and renders them via `_render/template`, selected by passing `context.template_id`
 
+### Changed
+- Drop the `reason` field from the `agentic_search` free-DSL output. It was decoded on every request and only logged, never used to build the query; removing it cuts free-DSL generation latency substantially with no accuracy change
+
 ### Fixed
 - Bundled skills (`ppl-reference`) are now included in the pip wheel — previously only available from git clones
 - Default agent now respects `BEDROCK_INFERENCE_PROFILE_ARN` env var instead of silently falling back to a hardcoded Sonnet 4 model (fixes #94)
