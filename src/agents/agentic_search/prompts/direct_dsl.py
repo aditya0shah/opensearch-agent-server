@@ -25,7 +25,7 @@ FALLBACK_DSL = '{"size":10,"query":{"match_all":{}}}'
 
 
 class EmitSearch(BaseModel):
-    """Structured output the model returns: the DSL plus a one-line rationale.
+    """Structured output the model returns: the ``_search`` body.
 
     ``dsl`` is an open object (no rigid sub-schema) so the model can emit any
     valid OpenSearch query body.
@@ -33,9 +33,6 @@ class EmitSearch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    reason: str = Field(
-        description="One short line mapping each clause of the DSL to the user's words."
-    )
     dsl: dict[str, Any] = Field(
         description="The OpenSearch _search request body as a JSON object."
     )
@@ -166,7 +163,6 @@ OUTPUT_FORMAT_INSTRUCTIONS = (
     "==== OUTPUT FORMAT ====\n"
     "- Put the OpenSearch request body (a single JSON object) in the `dsl` field of the EmitSearch tool call.\n"
     "- Use valid JSON only: standard double quotes for all keys/strings; no comments; no trailing commas.\n"
-    "- In the `reason` field, briefly map each clause to the user's words.\n"
     "- If the request truly cannot be fulfilled because no remotely relevant fields exist, set `dsl` to EXACTLY:\n"
     + FALLBACK_DSL
     + "\n"
