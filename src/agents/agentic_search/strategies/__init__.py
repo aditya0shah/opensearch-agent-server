@@ -15,6 +15,15 @@ fill — write its module and register it in ``STRATEGIES``; nothing else change
 from __future__ import annotations
 
 from agents.agentic_search.strategies.direct_dsl import DirectDslStrategy
+from agents.agentic_search.strategies.multi_template import (
+    MultiTemplateShapeA2Strategy,
+    MultiTemplateShapeA3Strategy,
+    MultiTemplateShapeA4Strategy,
+    MultiTemplateShapeA5Strategy,
+    MultiTemplateShapeAStrategy,
+    MultiTemplateShapeBStrategy,
+    MultiTemplateTwoCallStrategy,
+)
 from agents.agentic_search.strategies.multi_template_fill import (
     MultiTemplateFillStrategy,
 )
@@ -29,6 +38,16 @@ STRATEGIES = {
     DirectDslStrategy.name: DirectDslStrategy(),
     TemplateFillStrategy.name: TemplateFillStrategy(),
     MultiTemplateFillStrategy.name: MultiTemplateFillStrategy(),
+    # Benchmark-only prototypes comparing multi-template call structures. Never selected
+    # automatically; reachable only when a request names one via `context.strategy`.
+    # This registration exists on the benchmark branch only.
+    MultiTemplateTwoCallStrategy.name: MultiTemplateTwoCallStrategy(),
+    MultiTemplateShapeAStrategy.name: MultiTemplateShapeAStrategy(),
+    MultiTemplateShapeA2Strategy.name: MultiTemplateShapeA2Strategy(),
+    MultiTemplateShapeA3Strategy.name: MultiTemplateShapeA3Strategy(),
+    MultiTemplateShapeA4Strategy.name: MultiTemplateShapeA4Strategy(),
+    MultiTemplateShapeA5Strategy.name: MultiTemplateShapeA5Strategy(),
+    MultiTemplateShapeBStrategy.name: MultiTemplateShapeBStrategy(),
 }
 DEFAULT_STRATEGY = DirectDslStrategy.name
 # One template to fill: the focused fill prompt, which fills more precisely than the
