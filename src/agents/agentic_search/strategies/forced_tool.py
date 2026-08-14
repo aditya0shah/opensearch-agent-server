@@ -24,6 +24,7 @@ Upstream: https://github.com/strands-agents/harness-sdk/issues/3336
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -42,6 +43,60 @@ def supports_forced_tool(model: Any) -> bool:
     """
     client = getattr(model, "client", None)
     return client is not None and hasattr(client, "converse_stream")
+
+
+def forced_tool_fill_raw(
+    *,
+    model: Any,
+    tool_spec: dict[str, Any],
+    system_blocks: list[dict],
+    user_message: str,
+) -> dict[str, Any]:
+    """Force one tool call for a hand-built ``tool_spec`` and return its raw input.
+
+    The Pydantic-model form (:func:`forced_tool_fill`) covers the case where the tool's
+    shape is a model. Some tools are assembled at request time from several sources — a
+    merged multi-template schema, for example — and are validated per-branch afterwards
+    rather than against one model, so this returns the decoded tool input as a dict.
+
+    Raises:
+        ValueError: The forced tool produced no input, or the input was not a JSON object.
+    """
+    tool_name = tool_spec["name"]
+    kwargs: dict[str, Any] = {
+        "modelId": model.config.get("model_id"),
+        "system": [dict(b) for b in system_blocks],
+        "messages": [{"role": "user", "content": [{"text": user_message}]}],
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": tool_name,
+                        "description": tool_spec.get("description", "Emit the result."),
+                        "inputSchema": tool_spec["inputSchema"],
+                    }
+                }
+            ],
+            "toolChoice": {"tool": {"name": tool_name}},
+        },
+    }
+    temperature = model.config.get("temperature")
+    if temperature is not None:
+        kwargs["inferenceConfig"] = {"temperature": temperature}
+
+    resp = model.client.converse_stream(**kwargs)
+    tool_input = ""
+    for event in resp["stream"]:
+        delta = event.get("contentBlockDelta", {}).get("delta", {}).get("toolUse")
+        if delta and "input" in delta:
+            tool_input += delta["input"]
+
+    if not tool_input.strip():
+        raise ValueError("forced tool call produced no input")
+    parsed = json.loads(tool_input)
+    if not isinstance(parsed, dict):
+        raise ValueError("forced tool input is not a JSON object")
+    return parsed
 
 
 def forced_tool_fill(
