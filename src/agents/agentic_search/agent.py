@@ -26,11 +26,50 @@ from typing import Any
 from opensearchpy import OpenSearch
 
 from agents.agentic_search.prompts import FALLBACK_DSL
-from agents.agentic_search.strategies import DEFAULT_STRATEGY, STRATEGIES
+from agents.agentic_search.strategies import (
+    DEFAULT_STRATEGY,
+    MULTI_TEMPLATE_STRATEGY,
+    SINGLE_TEMPLATE_STRATEGY,
+    STRATEGIES,
+)
 from agents.agentic_search.strategies.base import GenerationRequest, GenerationStrategy
 from utils.model_factory import create_model
 
 logger = logging.getLogger(__name__)
+
+# Context keys carrying the search template(s) to fill.
+TEMPLATE_ID_KEY = "template_id"
+TEMPLATE_IDS_KEY = "template_ids"
+
+
+def _distinct_template_ids(context: dict[str, Any]) -> list[str]:
+    """Return the distinct template ids a request asks for, in order.
+
+    Accepts a single id under either key, so a caller may send a one-element
+    ``template_ids`` list without changing behavior. Duplicates are collapsed because
+    they do not represent a real choice.
+    """
+    raw = context.get(TEMPLATE_IDS_KEY)
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raw = []
+    ids = [str(x) for x in raw if x]
+    one = context.get(TEMPLATE_ID_KEY)
+    if one:
+        ids.append(str(one))
+    seen: set[str] = set()
+    return [i for i in ids if not (i in seen or seen.add(i))]
+
+
+def _template_strategy_for(context: dict[str, Any]) -> str | None:
+    """Name the template strategy this request needs, or ``None`` for free-DSL."""
+    n = len(_distinct_template_ids(context))
+    if n > 1:
+        return MULTI_TEMPLATE_STRATEGY
+    if n == 1:
+        return SINGLE_TEMPLATE_STRATEGY
+    return None
 
 
 class AgenticSearchAgent:
@@ -108,16 +147,25 @@ class AgenticSearchAgent:
     def _select_strategy(context: dict[str, Any]) -> GenerationStrategy:
         """Pick the generation strategy for this request.
 
-        An explicit ``context.strategy`` always wins. Otherwise the presence of
-        ``template_id`` is the mode switch: present -> ``template_fill``; absent ->
-        the free-DSL default. Template mode is opt-in and additive — callers that
-        send no ``template_id`` are unaffected.
+        An explicit ``context.strategy`` always wins. Otherwise the template keys are
+        the mode switch, and how many candidates a request carries decides which
+        template path runs:
+
+        - two or more distinct ids in ``template_ids`` -> ``multi_template_fill``,
+          which picks one and fills it in a single call;
+        - exactly one id (in either ``template_ids`` or ``template_id``) ->
+          ``template_fill``, the single-template path;
+        - neither -> the free-DSL default.
+
+        A single-candidate request does not go through the multi-template path: with
+        no choice to make it uses the dedicated single-template prompt. Template mode
+        stays opt-in and additive — callers that send no template keys are unaffected,
+        and an existing caller sending a scalar ``template_id`` keeps its current
+        behavior exactly.
         """
         strategy_name = context.get("strategy")
         if strategy_name is None:
-            strategy_name = (
-                "template_fill" if context.get("template_id") else DEFAULT_STRATEGY
-            )
+            strategy_name = _template_strategy_for(context) or DEFAULT_STRATEGY
         strategy: GenerationStrategy | None = STRATEGIES.get(strategy_name)
         if strategy is None:
             raise ValueError(f"unknown strategy '{strategy_name}'")

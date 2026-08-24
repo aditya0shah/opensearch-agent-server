@@ -43,6 +43,7 @@ from agents.agentic_search.template_schema import (
 logger = logging.getLogger(__name__)
 
 TEMPLATE_ID_KEY = "template_id"
+TEMPLATE_IDS_KEY = "template_ids"
 
 
 class _TemplateCannotExpress(Exception):
@@ -82,7 +83,7 @@ class TemplateFillStrategy:
         )
 
     def generate(self, request: GenerationRequest) -> dict[str, Any]:
-        template_id = request.context.get(TEMPLATE_ID_KEY)
+        template_id = self._template_id(request.context)
         if not template_id:
             # template_fill was selected without a template_id — nothing to fill.
             # Degrade rather than raise so the request still returns results.
@@ -108,6 +109,27 @@ class TemplateFillStrategy:
                 e,
             )
             return self._fallback_generate(request)
+
+    @staticmethod
+    def _template_id(context: dict[str, Any]) -> str | None:
+        """Return the single template to fill, from either context key.
+
+        A caller may name the template as a scalar ``template_id`` or as a one-element
+        ``template_ids`` list; both mean "fill this one template". A list carrying
+        several ids is routed to the multi-template strategy before reaching here, so
+        only its first entry is honored if one somehow arrives.
+        """
+        one = context.get(TEMPLATE_ID_KEY)
+        if one:
+            return str(one)
+        many = context.get(TEMPLATE_IDS_KEY)
+        if isinstance(many, str):
+            return many or None
+        if isinstance(many, list):
+            for candidate in many:
+                if candidate:
+                    return str(candidate)
+        return None
 
     def _fill_and_render(
         self, request: GenerationRequest, template_id: str

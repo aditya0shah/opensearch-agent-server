@@ -90,6 +90,10 @@ class TemplateSchema:
     index_binding: str | None
     param_schema: dict[str, Any]
     fill_model: type
+    # Human-readable "what this template searches", used to route a question to one
+    # template when a request carries several candidates. Optional at registration,
+    # so it may be absent.
+    description: str | None = None
 
 
 def _annotation_for(name: str, spec: dict[str, Any]) -> Any:
@@ -143,7 +147,10 @@ def _safe_field_name(param_name: str, used: set[str]) -> str:
 
 
 def build_fill_model(
-    param_schema: dict[str, Any], *, model_name: str = FILL_MODEL_NAME
+    param_schema: dict[str, Any],
+    *,
+    model_name: str = FILL_MODEL_NAME,
+    add_abstain: bool = True,
 ) -> type:
     """Build a Pydantic model whose fields are the template's params, 1:1.
 
@@ -171,14 +178,17 @@ def build_fill_model(
     # Reserve the abstain field's name so no real param can be sanitized onto it.
     # A template whose author literally named a param ``cannot_express`` keeps that
     # param (it maps to a distinct safe name) and simply forgoes the escape hatch.
-    add_abstain = CANNOT_EXPRESS_FIELD not in param_schema
-    if add_abstain:
-        used_names.add(CANNOT_EXPRESS_FIELD)
-    else:
+    # A template that declares a real param of this name keeps it and forgoes the
+    # hatch. Kept distinct from a caller simply opting out, which is not noteworthy.
+    name_taken = CANNOT_EXPRESS_FIELD in param_schema
+    if add_abstain and name_taken:
         logger.warning(
             "template has a real param named '%s'; abstain escape hatch disabled",
             CANNOT_EXPRESS_FIELD,
         )
+    add_abstain = add_abstain and not name_taken
+    if add_abstain:
+        used_names.add(CANNOT_EXPRESS_FIELD)
     for name, spec in param_schema.items():
         if not isinstance(spec, dict):
             raise ValueError(f"param '{name}' schema entry must be an object")
@@ -273,6 +283,7 @@ class TemplateSchemaCache:
             index_binding=doc.get("index_binding"),
             param_schema=param_schema,
             fill_model=fill_model,
+            description=doc.get("description"),
         )
 
     @staticmethod

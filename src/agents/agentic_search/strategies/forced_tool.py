@@ -24,6 +24,7 @@ Upstream: https://github.com/strands-agents/harness-sdk/issues/3336
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -119,3 +120,84 @@ def forced_tool_fill(
         return schema_model.model_validate_json(tool_input)
     except ValidationError as e:
         raise ValueError(f"forced tool input failed validation: {e}") from e
+
+
+def forced_tool_choice_any(
+    *,
+    model: Any,
+    tool_specs: list[dict[str, Any]],
+    system_blocks: list[dict],
+    user_message: str,
+) -> tuple[str, dict[str, Any]]:
+    """Offer several tools and force the model to call exactly one; return its choice.
+
+    Uses Bedrock ``toolChoice: {"any": {}}`` — the model must call one of ``tool_specs``
+    but chooses which. Because a tool must be called, there is no leading free-text
+    preamble (the same latency property as a forced single tool), while selection stays
+    the model's decision. The caller decides what each tool means: several template tools
+    plus a fallback tool make "which template, or none" a single structured choice.
+
+    Args:
+        model: The shared strands ``BedrockModel``; its pooled botocore client and
+            ``model.config`` (``model_id``, optional ``temperature``) drive the call.
+        tool_specs: Bedrock ``toolSpec`` bodies (``name``, ``description``,
+            ``inputSchema``), one per selectable option.
+        system_blocks: Bedrock system content blocks (may carry a cache point);
+            copied defensively before sending.
+        user_message: The user turn's text.
+
+    Returns:
+        ``(tool_name, tool_input)`` for the single tool the model called. ``tool_input``
+        is the decoded arguments object, ``{}`` for a tool called with no arguments.
+
+    Raises:
+        ValueError: The response contained no tool call.
+    """
+    client = model.client  # botocore bedrock-runtime client (pooled connection)
+    converse_kwargs: dict[str, Any] = {
+        "modelId": model.config.get("model_id"),
+        "system": [dict(b) for b in system_blocks],
+        "messages": [{"role": "user", "content": [{"text": user_message}]}],
+        "toolConfig": {
+            "tools": [{"toolSpec": spec} for spec in tool_specs],
+            # "any" forces a tool call but lets the model pick which one.
+            "toolChoice": {"any": {}},
+        },
+    }
+    temperature = model.config.get("temperature")
+    if temperature is not None:
+        converse_kwargs["inferenceConfig"] = {"temperature": temperature}
+
+    resp = client.converse_stream(**converse_kwargs)
+
+    # The tool name arrives on the block-start event; its input arrives as JSON string
+    # fragments across the following delta events. Read the first tool block to
+    # completion — "any" yields exactly one, but stop at the first defensively.
+    tool_name: str | None = None
+    tool_input = ""
+    for event in resp["stream"]:
+        start = event.get("contentBlockStart", {}).get("start", {})
+        started = start.get("toolUse")
+        if started and tool_name is None:
+            tool_name = started.get("name")
+        delta = event.get("contentBlockDelta", {}).get("delta", {})
+        tool_use = delta.get("toolUse")
+        if tool_use and "input" in tool_use and tool_name is not None:
+            tool_input += tool_use["input"]
+        if "contentBlockStop" in event and tool_name is not None:
+            break
+
+    if not tool_name:
+        raise ValueError("forced tool-choice call produced no tool call")
+
+    text = tool_input.strip()
+    if not text:
+        # A tool called with no arguments (e.g. the free-DSL fallback tool).
+        return tool_name, {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"forced tool-choice input was not valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError("forced tool-choice input was not a JSON object")
+    return tool_name, parsed
