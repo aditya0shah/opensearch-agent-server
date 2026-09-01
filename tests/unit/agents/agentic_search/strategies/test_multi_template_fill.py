@@ -1,4 +1,4 @@
-"""Unit tests for multi-template fill and the candidate-count strategy gate."""
+"""Unit tests for the multi-template fill strategy."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from agents.agentic_search.agent import _distinct_template_ids, _template_strategy_for
 from agents.agentic_search.strategies.base import GenerationRequest
 from agents.agentic_search.strategies.multi_template_fill import (
     MultiTemplateFillStrategy,
@@ -162,35 +161,6 @@ class _FakeModel:
         self.client = _Client()
 
 
-# ---- the strategy gate ----------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "context,expected",
-    [
-        ({}, None),
-        ({"template_id": "t1"}, "template_fill"),
-        ({"template_ids": ["t1"]}, "template_fill"),
-        ({"template_ids": "t1"}, "template_fill"),
-        # Duplicates are not a real choice.
-        ({"template_ids": ["t1", "t1"]}, "template_fill"),
-        ({"template_ids": ["t1"], "template_id": "t1"}, "template_fill"),
-        ({"template_ids": ["t1", "t2"]}, "multi_template_fill"),
-        ({"template_ids": ["t1"], "template_id": "t2"}, "multi_template_fill"),
-        ({"template_ids": []}, None),
-        ({"template_ids": None}, None),
-    ],
-)
-def test_gate_routes_on_distinct_candidate_count(context, expected):
-    assert _template_strategy_for(context) == expected
-
-
-def test_distinct_ids_preserve_order_and_dedupe():
-    assert _distinct_template_ids(
-        {"template_ids": ["b", "a", "b"], "template_id": "a"}
-    ) == ["b", "a"]
-
-
 # ---- single-candidate delegation -----------------------------------------
 
 
@@ -210,6 +180,23 @@ def test_single_surviving_candidate_delegates_to_single_template_path():
     ctx = single.calls[0].context
     assert ctx["template_id"] == "t1"
     assert "template_ids" not in ctx
+
+
+def test_scalar_and_list_naming_the_same_template_is_one_candidate():
+    """The shared id parser dedupes, so this must still take the single-template path."""
+    single, fallback = _RecordingSingle(), _RecordingFallback()
+    cache = _FakeCache({"t1": _schema("t1", "idx-a", CATALOG)})
+    strat = MultiTemplateFillStrategy(
+        single=single, fallback=fallback, schema_cache=cache
+    )
+
+    strat.generate(
+        _request({"template_ids": ["t1"], "template_id": "t1"}, _FakeClient())
+    )
+
+    assert len(single.calls) == 1
+    assert single.calls[0].context["template_id"] == "t1"
+    assert fallback.calls == 0
 
 
 def test_index_filter_reducing_to_one_candidate_delegates():

@@ -23,7 +23,6 @@ wrong query, the same contract as :mod:`template_fill`.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import replace
 from typing import Any
@@ -36,17 +35,20 @@ from agents.agentic_search.prompts.multi_template_fill import (
     format_candidates,
 )
 from agents.agentic_search.strategies.base import GenerationRequest, GenerationStrategy
-from agents.agentic_search.strategies.direct_dsl import DirectDslStrategy
 from agents.agentic_search.strategies.forced_tool import forced_tool_fill_raw
-from agents.agentic_search.strategies.template_fill import (
+from agents.agentic_search.strategies.template_base import (
     TEMPLATE_ID_KEY,
-    TemplateFillStrategy,
+    TEMPLATE_IDS_KEY,
+    TemplateStrategyBase,
+    distinct_template_ids,
 )
+from agents.agentic_search.strategies.template_fill import TemplateFillStrategy
 from agents.agentic_search.template_schema import (
     CANNOT_EXPRESS_FIELD,
     TemplateSchema,
     TemplateSchemaCache,
     build_fill_model,
+    json_type_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,9 @@ class _NoCandidateExpresses(Exception):
     """
 
 
-TEMPLATE_IDS_KEY = "template_ids"
+# The merged tool schema's choice property. Value-identical to TEMPLATE_ID_KEY but a
+# distinct concept: this names a field in the LLM-facing tool schema, not a request
+# context key, so the two must stay independent.
 CHOICE_FIELD = "template_id"
 
 # Upper bound on candidates fed to one call. The merged schema grows with the candidate
@@ -69,25 +73,6 @@ CHOICE_FIELD = "template_id"
 # prompt caching keeps it affordable. Extra candidates are dropped with a warning rather
 # than silently, so a caller can see the set was truncated.
 MAX_CANDIDATES = 8
-
-# param-schema "type" -> JSON Schema type. Mirrors the scalar map used to build the
-# per-template model, so the tool schema and the validating model agree.
-_JSON_TYPES = {
-    "string": "string",
-    "text": "string",
-    "keyword": "string",
-    "integer": "integer",
-    "int": "integer",
-    "long": "integer",
-    "number": "number",
-    "float": "number",
-    "double": "number",
-    "boolean": "boolean",
-    "bool": "boolean",
-    # Multi-value slots are surfaced as a string holding a JSON array literal, which the
-    # template body renders raw through a triple brace.
-    "array": "string",
-}
 
 
 def _is_true(value: Any) -> bool:
@@ -117,13 +102,13 @@ def _param_json_schema(spec: dict[str, Any]) -> dict[str, Any]:
         # the same members into a Literal preserving their original types, so declaring
         # a numeric enum as a string would make the model emit "5" and then fail
         # validation against Literal[1, 5, 10].
-        out["type"] = _JSON_TYPES.get(raw_type, "string")
+        out["type"] = json_type_for(raw_type)
         if not all(isinstance(v, str) for v in enum) and out["type"] == "string":
             # Mixed or non-string members with no usable declared type: omit the type
             # and let the enum alone constrain the value.
             out.pop("type", None)
         return out
-    out["type"] = _JSON_TYPES.get(raw_type, "string")
+    out["type"] = json_type_for(raw_type)
     if raw_type == "array":
         hint = 'JSON array literal, e.g. ["a","b"].'
         out["description"] = f"{out.get('description', '')} {hint}".strip()
@@ -163,13 +148,15 @@ def _prefixes_for(template_ids: list[str]) -> dict[str, str]:
     return out
 
 
-class MultiTemplateFillStrategy:
-    """Pick one of several candidate templates and fill it in a single call."""
+class MultiTemplateFillStrategy(TemplateStrategyBase):
+    """Pick one of several candidate templates and fill it in a single call.
+
+    The constructor, the render step, the free-DSL fallback and the inherited
+    ``needs_mapping = False`` come from
+    :class:`~agents.agentic_search.strategies.template_base.TemplateStrategyBase`.
+    """
 
     name = "multi_template_fill"
-    # Neither the choice nor the fill uses the index mapping, so skip the per-query
-    # mapping fetch; the free-DSL fallback re-adds it only when it is actually needed.
-    needs_mapping = False
 
     def __init__(
         self,
@@ -179,10 +166,8 @@ class MultiTemplateFillStrategy:
         schema_cache: TemplateSchemaCache | None = None,
         max_candidates: int = MAX_CANDIDATES,
     ) -> None:
-        self._fallback = fallback if fallback is not None else DirectDslStrategy()
-        self._schema_cache = (
-            schema_cache if schema_cache is not None else TemplateSchemaCache()
-        )
+        # Resolve the shared defaults first: self._single is built from them below.
+        super().__init__(fallback=fallback, schema_cache=schema_cache)
         # Single-template path, reused whenever only one candidate survives filtering.
         self._single = (
             single
@@ -196,7 +181,7 @@ class MultiTemplateFillStrategy:
     # ---- entry point ------------------------------------------------------
 
     def generate(self, request: GenerationRequest) -> dict[str, Any]:
-        ids = self._candidate_ids(request.context)
+        ids = distinct_template_ids(request.context)
         if not ids:
             logger.warning(
                 "multi_template_fill selected without candidates; falling back to free-DSL"
@@ -237,25 +222,6 @@ class MultiTemplateFillStrategy:
             return self._fallback_generate(request)
 
     # ---- candidate handling ----------------------------------------------
-
-    @staticmethod
-    def _candidate_ids(context: dict[str, Any]) -> list[str]:
-        """Return the requested candidate ids, de-duplicated, order preserved.
-
-        Accepts a single id under either key so a caller can send a one-element list
-        without special-casing.
-        """
-        raw = context.get(TEMPLATE_IDS_KEY)
-        if isinstance(raw, str):
-            raw = [raw]
-        if not isinstance(raw, list):
-            raw = []
-        ids = [str(x) for x in raw if x]
-        one = context.get(TEMPLATE_ID_KEY)
-        if one and str(one) not in ids:
-            ids.append(str(one))
-        seen: set[str] = set()
-        return [i for i in ids if not (i in seen or seen.add(i))]
 
     def _resolve(
         self, ids: list[str], request: GenerationRequest
@@ -433,39 +399,5 @@ class MultiTemplateFillStrategy:
         }
         return spec_out, name_map
 
-    # ---- shared tail ------------------------------------------------------
 
-    @staticmethod
-    def _render(
-        client: Any, template_id: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Render the stored body via ``POST _render/template`` and unwrap the DSL."""
-        resp = client.render_search_template(id=template_id, body={"params": params})
-        output = resp.get("template_output") if isinstance(resp, dict) else None
-        if output is None:
-            raise ValueError("_render/template returned no template_output")
-        if isinstance(output, str):
-            output = json.loads(output)
-        if not isinstance(output, dict):
-            raise ValueError("rendered template_output is not a _search body object")
-        return output
-
-    def _fallback_generate(self, request: GenerationRequest) -> dict[str, Any]:
-        """Run the free-DSL fallback, fetching the mapping it needs."""
-        req = request
-        if not request.mapping:
-            try:
-                mapping = json.dumps(
-                    request.client.indices.get_mapping(index=request.index_name)
-                )
-                req = replace(request, mapping=mapping)
-            except Exception as e:  # noqa: BLE001 - let the fallback try regardless
-                logger.warning(
-                    "fallback mapping fetch failed for index=%s (%s)",
-                    request.index_name,
-                    e,
-                )
-        return self._fallback.generate(req)
-
-
-__all__ = ["MAX_CANDIDATES", "TEMPLATE_IDS_KEY", "MultiTemplateFillStrategy"]
+__all__ = ["MAX_CANDIDATES", "MultiTemplateFillStrategy"]

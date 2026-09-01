@@ -33,38 +33,15 @@ from agents.agentic_search.strategies import (
     STRATEGIES,
 )
 from agents.agentic_search.strategies.base import GenerationRequest, GenerationStrategy
+from agents.agentic_search.strategies.template_base import distinct_template_ids
 from utils.model_factory import create_model
 
 logger = logging.getLogger(__name__)
 
-# Context keys carrying the search template(s) to fill.
-TEMPLATE_ID_KEY = "template_id"
-TEMPLATE_IDS_KEY = "template_ids"
-
-
-def _distinct_template_ids(context: dict[str, Any]) -> list[str]:
-    """Return the distinct template ids a request asks for, in order.
-
-    Accepts a single id under either key, so a caller may send a one-element
-    ``template_ids`` list without changing behavior. Duplicates are collapsed because
-    they do not represent a real choice.
-    """
-    raw = context.get(TEMPLATE_IDS_KEY)
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, list):
-        raw = []
-    ids = [str(x) for x in raw if x]
-    one = context.get(TEMPLATE_ID_KEY)
-    if one:
-        ids.append(str(one))
-    seen: set[str] = set()
-    return [i for i in ids if not (i in seen or seen.add(i))]
-
 
 def _template_strategy_for(context: dict[str, Any]) -> str | None:
     """Name the template strategy this request needs, or ``None`` for free-DSL."""
-    n = len(_distinct_template_ids(context))
+    n = len(distinct_template_ids(context))
     if n > 1:
         return MULTI_TEMPLATE_STRATEGY
     if n == 1:

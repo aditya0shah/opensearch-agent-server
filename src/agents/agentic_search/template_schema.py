@@ -64,22 +64,51 @@ _CANNOT_EXPRESS_DESCRIPTION = (
     "has no matching parameter. Otherwise leave it false and fill the parameters."
 )
 
-# param-schema "type" -> Python annotation for the non-enum case. ``number`` is
-# ``int | float``, int first, so ``size:5`` renders as ``5``; a bare ``float`` would
-# coerce it to ``5.0``, which OpenSearch rejects for integer fields.
-_SCALAR_TYPES: dict[str, Any] = {
-    "string": str,
-    "text": str,
-    "keyword": str,
-    "integer": int,
-    "int": int,
-    "long": int,
-    "number": int | float,
-    "float": float,
-    "double": float,
-    "boolean": bool,
-    "bool": bool,
+# param-schema "type" -> (Python annotation, JSON Schema type name). Single source of
+# truth for both readings of a declared type: the validating model built here consumes
+# the Python half, and the hand-built merged tool schema in ``multi_template_fill``
+# consumes the JSON half, so the two can never disagree on a type name.
+#
+# ``number`` is ``int | float``, int first, so ``size:5`` renders as ``5``; a bare
+# ``float`` would coerce it to ``5.0``, which OpenSearch rejects for integer fields.
+# JSON Schema cannot express that preference, so its half is plain ``number``.
+#
+# ``array`` has no Python half: a multi-value slot is surfaced to the model as a string
+# holding a JSON array literal, which the template body renders raw through a triple
+# brace. Leaving it ``None`` keeps :func:`_annotation_for` treating it as an unknown
+# type (and keeps warning about it) exactly as before.
+PARAM_TYPES: dict[str, tuple[Any | None, str]] = {
+    "string": (str, "string"),
+    "text": (str, "string"),
+    "keyword": (str, "string"),
+    "integer": (int, "integer"),
+    "int": (int, "integer"),
+    "long": (int, "integer"),
+    "number": (int | float, "number"),
+    "float": (float, "number"),
+    "double": (float, "number"),
+    "boolean": (bool, "boolean"),
+    "bool": (bool, "boolean"),
+    "array": (None, "string"),
 }
+
+# The Python half, for building the validating model. Derived so a new type cannot be
+# added to one reading and forgotten in the other.
+_SCALAR_TYPES: dict[str, Any] = {
+    name: py for name, (py, _) in PARAM_TYPES.items() if py is not None
+}
+
+DEFAULT_JSON_TYPE = "string"
+
+
+def json_type_for(type_name: Any) -> str:
+    """Return the JSON Schema type name for a param-schema ``type``.
+
+    Unknown and missing types fall back to ``string``, matching how
+    :func:`_annotation_for` degrades: rendering stays the arbiter of a bad value.
+    """
+    entry = PARAM_TYPES.get(str(type_name or "string").lower())
+    return entry[1] if entry is not None else DEFAULT_JSON_TYPE
 
 
 @dataclass(frozen=True)
